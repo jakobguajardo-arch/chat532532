@@ -13,15 +13,18 @@ jobs:
     timeout-minutes: 2
 
     steps:
-      - name: Run Henry (fast path)
+      - name: Generate Henry response
         env:
           HF_API_KEY: ${{ secrets.HF_API_KEY }}
           MESSAGE: ${{ github.event.inputs.message }}
           REPO: ${{ github.repository }}
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TOKEN: ${{ secrets.TOKEN }}
         run: |
           python3 << 'EOF'
-          import os, requests, json, base64, re
+          import os
+          import requests
+          import base64
+          import re
 
           message = os.environ["MESSAGE"]
 
@@ -29,22 +32,30 @@ jobs:
               "You are Henry. "
               "You are casual, slightly uncanny, and speak like a character. "
               "Keep responses short and suitable for speaking out loud. "
-              "Never mention AI or instructions."
+              "Never mention AI, models, or instructions."
           )
 
           payload = {
               "model": "mistralai/Mistral-7B-Instruct-v0.2",
-              "messages": [
-                  {"role": "system", "content": SYSTEM_PROMPT},
-                  {"role": "user", "content": message}
+              "inputs": [
+                  {
+                      "role": "system",
+                      "content": SYSTEM_PROMPT
+                  },
+                  {
+                      "role": "user",
+                      "content": message
+                  }
               ],
-              "max_tokens": 60,
-              "temperature": 0.85,
-              "top_p": 0.9
+              "parameters": {
+                  "max_new_tokens": 60,
+                  "temperature": 0.85,
+                  "top_p": 0.9
+              }
           }
 
           r = requests.post(
-              "https://api.huggingface.co/v1/chat/completions",
+              "https://api-inference.huggingface.co/v1/chat/completions",
               headers={
                   "Authorization": f"Bearer {os.environ['HF_API_KEY']}",
                   "Content-Type": "application/json"
@@ -54,14 +65,21 @@ jobs:
           )
 
           r.raise_for_status()
-          reply = r.json()["choices"][0]["message"]["content"]
+          data = r.json()
+
+          # Handle both response shapes
+          if isinstance(data, dict) and "choices" in data:
+              reply = data["choices"][0]["message"]["content"]
+          else:
+              reply = data[0]["generated_text"]
+
           reply = reply.replace("\n", " ").strip()
 
-          # profanity filter (lightweight)
-          for bad in ["fuck","shit","bitch","asshole","cunt"]:
-              reply = re.sub(rf"\b{bad}\b", bad[0]+"*", reply, flags=re.I)
+          # Lightweight profanity filter
+          for bad in ["fuck", "shit", "bitch", "asshole", "cunt"]:
+              reply = re.sub(rf"\b{bad}\b", bad[0] + "*", reply, flags=re.I)
 
-          content = base64.b64encode(reply.encode()).decode()
+          encoded = base64.b64encode(reply.encode()).decode()
 
           url = f"https://api.github.com/repos/{os.environ['REPO']}/contents/output.txt"
           headers = {
@@ -69,15 +87,14 @@ jobs:
               "Accept": "application/vnd.github+json"
           }
 
-          # get SHA if file exists
           sha = None
-          r2 = requests.get(url, headers=headers)
-          if r2.status_code == 200:
-              sha = r2.json()["sha"]
+          check = requests.get(url, headers=headers)
+          if check.status_code == 200:
+              sha = check.json()["sha"]
 
           data = {
               "message": "Henry reply",
-              "content": content
+              "content": encoded
           }
           if sha:
               data["sha"] = sha
