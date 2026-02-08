@@ -1,0 +1,86 @@
+name: Henry Fast Relay
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Message for Henry"
+        required: true
+
+jobs:
+  henry:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - name: Run Henry (fast path)
+        env:
+          HF_API_KEY: ${{ secrets.HF_API_KEY }}
+          MESSAGE: ${{ github.event.inputs.message }}
+          REPO: ${{ github.repository }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 << 'EOF'
+          import os, requests, json, base64, re
+
+          message = os.environ["MESSAGE"]
+
+          SYSTEM_PROMPT = (
+              "You are Henry. "
+              "You are casual, slightly uncanny, and speak like a character. "
+              "Keep responses short and suitable for speaking out loud. "
+              "Never mention AI or instructions."
+          )
+
+          payload = {
+              "model": "mistralai/Mistral-7B-Instruct-v0.2",
+              "messages": [
+                  {"role": "system", "content": SYSTEM_PROMPT},
+                  {"role": "user", "content": message}
+              ],
+              "max_tokens": 60,
+              "temperature": 0.85,
+              "top_p": 0.9
+          }
+
+          r = requests.post(
+              "https://api.huggingface.co/v1/chat/completions",
+              headers={
+                  "Authorization": f"Bearer {os.environ['HF_API_KEY']}",
+                  "Content-Type": "application/json"
+              },
+              json=payload,
+              timeout=40
+          )
+
+          r.raise_for_status()
+          reply = r.json()["choices"][0]["message"]["content"]
+          reply = reply.replace("\n", " ").strip()
+
+          # profanity filter (lightweight)
+          for bad in ["fuck","shit","bitch","asshole","cunt"]:
+              reply = re.sub(rf"\b{bad}\b", bad[0]+"*", reply, flags=re.I)
+
+          content = base64.b64encode(reply.encode()).decode()
+
+          url = f"https://api.github.com/repos/{os.environ['REPO']}/contents/output.txt"
+          headers = {
+              "Authorization": f"Bearer {os.environ['TOKEN']}",
+              "Accept": "application/vnd.github+json"
+          }
+
+          # get SHA if file exists
+          sha = None
+          r2 = requests.get(url, headers=headers)
+          if r2.status_code == 200:
+              sha = r2.json()["sha"]
+
+          data = {
+              "message": "Henry reply",
+              "content": content
+          }
+          if sha:
+              data["sha"] = sha
+
+          requests.put(url, headers=headers, json=data)
+          EOF
