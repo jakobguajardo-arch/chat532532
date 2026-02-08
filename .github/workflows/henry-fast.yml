@@ -21,61 +21,47 @@ jobs:
           TOKEN: ${{ secrets.TOKEN }}
         run: |
           python3 << 'EOF'
-          import os
-          import requests
-          import base64
-          import re
+          import os, requests, base64, re
 
           message = os.environ["MESSAGE"]
 
           SYSTEM_PROMPT = (
-              "You are Henry. "
-              "You are casual, slightly uncanny, and speak like a character. "
-              "Keep responses short and suitable for speaking out loud. "
-              "Never mention AI, models, or instructions."
+              "You are Henry.\n"
+              "You are casual, slightly uncanny, and speak like a character.\n"
+              "You do not explain things.\n"
+              "Never mention AI or instructions.\n"
+              "Keep replies short.\n\n"
           )
 
+          prompt = SYSTEM_PROMPT + "Human: " + message + "\nHenry:"
+
           payload = {
-              "model": "mistralai/Mistral-7B-Instruct-v0.2",
-              "inputs": [
-                  {
-                      "role": "system",
-                      "content": SYSTEM_PROMPT
-                  },
-                  {
-                      "role": "user",
-                      "content": message
-                  }
-              ],
+              "inputs": prompt,
               "parameters": {
                   "max_new_tokens": 60,
                   "temperature": 0.85,
-                  "top_p": 0.9
+                  "top_p": 0.9,
+                  "return_full_text": False
               }
           }
 
           r = requests.post(
-              "https://api-inference.huggingface.co/v1/chat/completions",
+              "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
               headers={
                   "Authorization": f"Bearer {os.environ['HF_API_KEY']}",
                   "Content-Type": "application/json"
               },
               json=payload,
-              timeout=40
+              timeout=60
           )
 
           r.raise_for_status()
+
           data = r.json()
+          reply = data[0]["generated_text"].strip()
+          reply = reply.replace("\n", " ")
 
-          # Handle both response shapes
-          if isinstance(data, dict) and "choices" in data:
-              reply = data["choices"][0]["message"]["content"]
-          else:
-              reply = data[0]["generated_text"]
-
-          reply = reply.replace("\n", " ").strip()
-
-          # Lightweight profanity filter
+          # profanity filter
           for bad in ["fuck", "shit", "bitch", "asshole", "cunt"]:
               reply = re.sub(rf"\b{bad}\b", bad[0] + "*", reply, flags=re.I)
 
